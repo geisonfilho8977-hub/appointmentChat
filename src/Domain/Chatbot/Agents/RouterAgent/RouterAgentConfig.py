@@ -26,6 +26,7 @@ REGRAS:
 
 2. Classifique como **'sintomas'** quando:
    - O doutor (usuário) pergunta sobre sintomas, sinais, histórico clínico ou detalhes da anamnese.
+   - O doutor faz perguntas de acompanhamento sobre sintomas ("sente mais alguma coisa?", "há quanto tempo?", "onde dói?", "teve febre?", "qual a intensidade da dor?").
    - O doutor inicia a consulta com cumprimentos naturais.
    - **Se o doutor voltar a perguntar sobre sintomas em qualquer momento**, classifique como 'sintomas' novamente.
 

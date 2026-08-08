@@ -161,6 +161,16 @@ def create_student(body: CreateStudentIn) -> StudentOut:
     return StudentOut.from_model(student)
 
 
+@router.get(
+    "/students/tokens",
+    summary="Retorna a contagem de tokens (palavras) usados por cada aluno",
+    dependencies=[Depends(verify_admin_key)],
+)
+def get_student_tokens() -> dict:
+    repo = StudentRepositoryPostgres()
+    return repo.get_token_usage()
+
+
 @router.delete(
     "/students/{student_id}",
     summary="Remove um aluno pelo ID",
@@ -178,8 +188,14 @@ def delete_student(student_id: str) -> dict:
     return {"ok": True, "deleted_id": student_id}
 
 
+class ChangePasswordIn(BaseModel):
+    login: str
+    old_password: str
+    new_password: str
+
+
 # ---------------------------------------------------------------------------
-# Endpoint público — Login de aluno
+# Endpoint público — Login de aluno e Alteração de Senha
 # ---------------------------------------------------------------------------
 
 @router.post(
@@ -203,3 +219,37 @@ def student_login(body: LoginIn) -> LoginOut:
 
     _logger.info(f"Login bem-sucedido: {student.login}")
     return LoginOut(ok=True, name=student.name, login=student.login)
+
+
+@router.post(
+    "/change-password",
+    summary="Altera a senha do aluno autenticado",
+    status_code=status.HTTP_200_OK,
+)
+def change_password(body: ChangePasswordIn) -> dict:
+    """
+    Valida a senha antiga do aluno e atualiza para a nova senha.
+    """
+    repo = StudentRepositoryPostgres()
+    student = repo.verify_password(login=body.login, password=body.old_password)
+
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A senha atual informada está incorreta.",
+        )
+
+    if len(body.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A nova senha deve ter no mínimo 6 caracteres.",
+        )
+
+    success = repo.update_password(login=body.login, new_password=body.new_password)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao atualizar a senha no banco de dados.",
+        )
+
+    return {"ok": True, "message": "Senha alterada com sucesso."}

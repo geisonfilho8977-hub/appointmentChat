@@ -8,10 +8,11 @@ Campos:
 """
 from __future__ import annotations
 
+import json
 import bcrypt
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from src.Infrastructure.Database.Connection import get_connection
@@ -100,6 +101,24 @@ class StudentRepositoryPostgres:
     def delete(self, student_id: str) -> bool:
         with get_connection() as conn:
             with conn.cursor() as cur:
+                # Busca o login do aluno antes de deletar
+                cur.execute(
+                    "SELECT login FROM students WHERE id = %s",
+                    (student_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                student_login = row[0]
+
+                # Deleta todas as sessões de chat do aluno
+                cur.execute(
+                    "DELETE FROM chat_sessions WHERE LOWER(user_login) = LOWER(%s)",
+                    (student_login,),
+                )
+                self._logger.info(f"Sessões de chat removidas para o aluno: {student_login}")
+
+                # Deleta o aluno
                 cur.execute(
                     "DELETE FROM students WHERE id = %s RETURNING id",
                     (student_id,),
@@ -108,3 +127,59 @@ class StudentRepositoryPostgres:
                 if deleted:
                     self._logger.info(f"Aluno removido: {student_id}")
                 return deleted is not None
+
+    def update_password(self, login: str, new_password: str) -> bool:
+        """Atualiza a senha do aluno (bcrypt)."""
+        password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE students
+                    SET password_hash = %s
+                    WHERE login = %s
+                    RETURNING id
+                    """,
+                    (password_hash, login.strip().lower()),
+                )
+                updated = cur.fetchone()
+                if updated:
+                    self._logger.info(f"Senha atualizada com sucesso para o aluno: {login}")
+                return updated is not None
+
+    def get_token_usage(self) -> Dict[str, int]:
+        """
+        Retorna um dicionário {login: token_count} com a contagem total de tokens
+        por aluno — incluindo conversas já deletadas (acumuladas em students.total_tokens)
+        mais as conversas ainda existentes em chat_sessions.
+        """
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # 1) Tokens acumulados de conversas deletadas (persistidos na tabela students)
+                cur.execute("SELECT LOWER(login), total_tokens FROM students")
+                usage: Dict[str, int] = {
+                    row[0]: row[1] for row in cur.fetchall() if row[0]
+                }
+
+                # 2) Tokens das conversas ainda existentes em chat_sessions
+                cur.execute(
+                    "SELECT LOWER(user_login), history FROM chat_sessions WHERE user_login IS NOT NULL"
+                )
+                for login, history_raw in cur.fetchall():
+                    if not login:
+                        continue
+                    history = history_raw
+                    if isinstance(history, str):
+                        try:
+                            history = json.loads(history)
+                        except Exception:
+                            history = []
+                    token_count = 0
+                    if isinstance(history, list):
+                        for entry in history:
+                            msg = entry.get("message", "") if isinstance(entry, dict) else ""
+                            token_count += len(str(msg).split())
+                    usage[login] = usage.get(login, 0) + token_count
+
+        return usage

@@ -22,6 +22,30 @@ class ChatMemoryStore:
     ):
         self._logger = get_logger(__name__)
         self._max_history_entries = max_history_entries
+        self._table_created = False
+        self._ensure_table()
+
+    def _ensure_table(self) -> None:
+        if self._table_created:
+            return
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS chat_memories (
+                            session_id VARCHAR(255) PRIMARY KEY,
+                            disease VARCHAR(255),
+                            symptom_list JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            history JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        );
+                        """
+                    )
+            self._table_created = True
+        except Exception as exc:
+            self._logger.error("Erro ao garantir tabela chat_memories no PostgreSQL: %s", exc)
 
     def _base_memory(
         self,
@@ -37,6 +61,7 @@ class ChatMemoryStore:
         }
 
     async def get_memory(self, session_id: str) -> Optional[dict[str, Any]]:
+        self._ensure_table()
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -98,6 +123,7 @@ class ChatMemoryStore:
         return await self._write_data(session_id, data)
 
     async def _write_data(self, session_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_table()
         try:
             disease = data.get("disease")
             symptom_list_json = json.dumps(data.get("symptom_list") or [])
