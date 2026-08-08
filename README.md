@@ -103,6 +103,6 @@ appointmentChat/
 
 ---
 
-## �� Conteinerização com Docker & Ngrok
+## 🐳 Conteinerização com Docker & Ngrok
 
-O backend está pronto para rodar conteinerizado via `docker-compose.yml` na raiz do projeto, integrando PostgreSQL, Backend, Frontend e túnel público seguro **Ngrok**. Consulte [`DEPLOY_DOCKER.md`](../DEPLOY_DOCKER.md) na raiz para instrução completa.
+O backend está pronto para rodar conteinerizado via `docker-compose.yml` na raiz do projeto, integrando PostgreSQL, Backend, Frontend e túnel público seguro **Ngrok**..
