@@ -49,7 +49,7 @@ class LangChainOpenAILlm(LlmInterface):
             model=config.model,
             max_tokens=config.max_completion_tokens,
             api_key=_get_openai_api_key(),
-            temperature=0.7,
+            temperature=getattr(config, "temperature", 0.7),
         )
 
         self._prompt = ChatPromptTemplate.from_messages(

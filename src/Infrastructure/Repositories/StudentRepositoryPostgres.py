@@ -150,36 +150,10 @@ class StudentRepositoryPostgres:
 
     def get_token_usage(self) -> Dict[str, int]:
         """
-        Retorna um dicionário {login: token_count} com a contagem total de tokens
-        por aluno — incluindo conversas já deletadas (acumuladas em students.total_tokens)
-        mais as conversas ainda existentes em chat_sessions.
+        Retorna um dicionário {login: token_count} com o total acumulado de tokens
+        gastos por aluno (computados em tempo real a cada interação de chat).
         """
         with get_connection() as conn:
             with conn.cursor() as cur:
-                # 1) Tokens acumulados de conversas deletadas (persistidos na tabela students)
                 cur.execute("SELECT LOWER(login), total_tokens FROM students")
-                usage: Dict[str, int] = {
-                    row[0]: row[1] for row in cur.fetchall() if row[0]
-                }
-
-                # 2) Tokens das conversas ainda existentes em chat_sessions
-                cur.execute(
-                    "SELECT LOWER(user_login), history FROM chat_sessions WHERE user_login IS NOT NULL"
-                )
-                for login, history_raw in cur.fetchall():
-                    if not login:
-                        continue
-                    history = history_raw
-                    if isinstance(history, str):
-                        try:
-                            history = json.loads(history)
-                        except Exception:
-                            history = []
-                    token_count = 0
-                    if isinstance(history, list):
-                        for entry in history:
-                            msg = entry.get("message", "") if isinstance(entry, dict) else ""
-                            token_count += len(str(msg).split())
-                    usage[login] = usage.get(login, 0) + token_count
-
-        return usage
+                return {row[0]: row[1] for row in cur.fetchall() if row[0]}

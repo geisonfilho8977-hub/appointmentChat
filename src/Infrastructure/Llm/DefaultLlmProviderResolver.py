@@ -3,7 +3,7 @@ from typing import Dict, Optional, Type
 from src.Domain.Interfaces.Llm.LlmInterface import LlmInterface, LlmConfig
 from src.Domain.Interfaces.Llm.LlmProviderResolver import LlmProviderResolver
 from src.SharedKernel.Messages.Exceptions import AgentTypeNotFoundError
-from src.Infrastructure.Llm.GemniLlm import GeminiLlm
+from src.Infrastructure.Llm.GeminiLlm import GeminiLlm
 from src.Infrastructure.Llm.LangChainOpenAILlm import LangChainOpenAILlm
 
 

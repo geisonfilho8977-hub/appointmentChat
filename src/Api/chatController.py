@@ -5,7 +5,7 @@ Usa FastAPI Dependency Injection para garantir que ChatCommandHandler
 seja um singleton por aplicação (evita perda de estado entre requests).
 """
 from fastapi import APIRouter, Depends
-from src.Application.Handlers.Chat.DTOs_.ChatCommand import ChatCommand
+from src.Application.Handlers.Chat.DTOs.ChatCommand import ChatCommand
 from src.Application.Handlers.Chat.ChatCommandHandler import ChatCommandHandler
 
 router = APIRouter(prefix="/chat", tags=["Chat"])

@@ -38,9 +38,13 @@ class ChatMemoryStore:
                             disease VARCHAR(255),
                             symptom_list JSONB NOT NULL DEFAULT '[]'::jsonb,
                             history JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            patient_profile JSONB,
+                            user_login VARCHAR(255),
                             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                         );
+                        ALTER TABLE chat_memories ADD COLUMN IF NOT EXISTS patient_profile JSONB;
+                        ALTER TABLE chat_memories ADD COLUMN IF NOT EXISTS user_login VARCHAR(255);
                         """
                     )
             self._table_created = True
@@ -53,11 +57,15 @@ class ChatMemoryStore:
         symptom_list: Optional[list[str]] = None,
         disease: Optional[str] = None,
         history: Optional[list[dict[str, Any]]] = None,
+        patient_profile: Optional[dict] = None,
+        user_login: Optional[str] = None,
     ) -> dict[str, Any]:
         return {
             "symptom_list": symptom_list or [],
             "disease": disease,
             "history": history or [],
+            "patient_profile": patient_profile,
+            "user_login": user_login,
         }
 
     async def get_memory(self, session_id: str) -> Optional[dict[str, Any]]:
@@ -66,7 +74,7 @@ class ChatMemoryStore:
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT disease, symptom_list, history FROM chat_memories WHERE session_id = %s",
+                        "SELECT disease, symptom_list, history, patient_profile, user_login FROM chat_memories WHERE session_id = %s",
                         (session_id,),
                     )
                     row = cur.fetchone()
@@ -76,11 +84,17 @@ class ChatMemoryStore:
                     disease = row[0]
                     symptom_list = row[1] if isinstance(row[1], list) else json.loads(row[1] or "[]")
                     history = row[2] if isinstance(row[2], list) else json.loads(row[2] or "[]")
+                    patient_profile = row[3] if isinstance(row[3], dict) else (
+                        json.loads(row[3]) if row[3] else None
+                    )
+                    user_login = row[4]
 
                     return self._base_memory(
                         disease=disease,
                         symptom_list=symptom_list,
                         history=history,
+                        patient_profile=patient_profile,
+                        user_login=user_login,
                     )
         except Exception as exc:
             self._logger.error("Erro ao recuperar memória do PostgreSQL para %s: %s", session_id, exc)
@@ -93,11 +107,15 @@ class ChatMemoryStore:
         disease: Optional[str],
         *,
         history: Optional[list[dict[str, Any]]] = None,
+        patient_profile: Optional[dict] = None,
+        user_login: Optional[str] = None,
     ) -> dict[str, Any]:
         data = self._base_memory(
             symptom_list=symptom_list,
             disease=disease,
             history=history,
+            patient_profile=patient_profile,
+            user_login=user_login,
         )
         return await self._write_data(session_id, data)
 
@@ -128,20 +146,25 @@ class ChatMemoryStore:
             disease = data.get("disease")
             symptom_list_json = json.dumps(data.get("symptom_list") or [])
             history_json = json.dumps(data.get("history") or [])
+            profile_raw = data.get("patient_profile")
+            profile_json = json.dumps(profile_raw) if profile_raw is not None else None
+            user_login = data.get("user_login")
 
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO chat_memories (session_id, disease, symptom_list, history, updated_at)
-                        VALUES (%s, %s, %s::jsonb, %s::jsonb, NOW())
+                        INSERT INTO chat_memories (session_id, disease, symptom_list, history, patient_profile, user_login, updated_at)
+                        VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, NOW())
                         ON CONFLICT (session_id) DO UPDATE SET
                             disease = EXCLUDED.disease,
                             symptom_list = EXCLUDED.symptom_list,
                             history = EXCLUDED.history,
+                            patient_profile = COALESCE(EXCLUDED.patient_profile, chat_memories.patient_profile),
+                            user_login = COALESCE(EXCLUDED.user_login, chat_memories.user_login),
                             updated_at = NOW()
                         """,
-                        (session_id, disease, symptom_list_json, history_json),
+                        (session_id, disease, symptom_list_json, history_json, profile_json, user_login),
                     )
         except Exception as exc:
             self._logger.error("Erro ao salvar memória no PostgreSQL para %s: %s", session_id, exc)

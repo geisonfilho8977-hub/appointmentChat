@@ -16,12 +16,13 @@ from src.SharedKernel.Messages.Exceptions import (
 )
 from src.SharedKernel.Logging.Logger import get_logger
 from src.SharedKernel.Observer.Observer import MessageSubject, LoggingObserver
-from src.Application.Handlers.Chat.DTOs_.ChatCommand import ChatCommand
+from src.Application.Handlers.Chat.DTOs.ChatCommand import ChatCommand
 
-from src.Infrastructure.Repositories.PatientRepositoryPstgres import PatientRepositoryPostgres
+from src.Infrastructure.Repositories.PatientRepositoryPostgres import PatientRepositoryPostgres
 from src.Infrastructure.Repositories.PatientSymptomRepositoryPostgres import PatientSymptomRepositoryPostgres
 from src.Domain.Entities.Symptom import Symptom
 from src.Infrastructure.Cache.ChatMemoryStore import ChatMemoryStore
+from src.Infrastructure.Database.Connection import get_connection
 
 
 class ChatCommandHandler:
@@ -31,10 +32,10 @@ class ChatCommandHandler:
     Gerencia:
     - Inicialização e roteamento entre agentes (Router → Sintomas/Conversation/Final/Fallback)
     - Persistência do histórico no PostgreSQL via ChatMemoryStore (gerenciado via LangChain)
-    - Seleção aleatória de paciente/doença ao iniciar nova sessão
+    - Seleção aleatória de paciente/doença e perfil comportamental ao iniciar nova sessão
     """
 
-    HISTORY_WINDOW = 500  # Número máximo de mensagens passadas enviadas ao prompt
+    HISTORY_WINDOW = 500
 
     def __init__(self, agent_factory: Optional[AgentFactory] = None):
         self.logger = get_logger(__name__)
@@ -59,8 +60,10 @@ class ChatCommandHandler:
         session_id = str(command.session_id)
         message = command.message
 
-        # Garante que a sessão existe no Redis (cria com dados aleatórios se nova)
-        memory = await self._ensure_session_memory(session_id)
+        user_login = command.user_login
+
+        # Garante que a sessão existe (cria com dados aleatórios se nova)
+        memory = await self._ensure_session_memory(session_id, user_login=user_login)
 
         # Salva mensagem do usuário no histórico
         memory = await self.chat_memory_store.append_history(session_id, "user", message)
@@ -71,7 +74,11 @@ class ChatCommandHandler:
         symptom_list = memory.get("symptom_list") or []
         disease = memory.get("disease")
         history = memory.get("history") or []
+        patient_profile = memory.get("patient_profile")
         conversation_context = self._format_history(history)
+
+        # Constrói bloco de perfil para injeção nos prompts
+        profile_block = self._build_profile_block(patient_profile)
 
         # Loop de roteamento: começa no router, vai ao agente adequado
         current_agent_type = "router"
@@ -82,6 +89,7 @@ class ChatCommandHandler:
                 conversation_context=conversation_context,
                 symptom_list=symptom_list,
                 disease=disease,
+                profile_block=profile_block,
             )
 
             agent = self._get_agent(
@@ -101,7 +109,12 @@ class ChatCommandHandler:
                 conversation_context = self._format_history(history)
 
             if response.agent_type == AgentType.FINAL:
-                return response.message or ""
+                final_msg = response.message or ""
+                effective_login = user_login or memory.get("user_login")
+                turn_tokens = len(message.split()) + len(final_msg.split())
+                if effective_login and turn_tokens > 0:
+                    self._add_tokens_to_student(effective_login, turn_tokens)
+                return final_msg
 
             # Resolve próximo agente com fallback seguro
             next_agent = response.next_agent or "sintomas"
@@ -132,20 +145,58 @@ class ChatCommandHandler:
         except Exception as e:
             raise HandlerNotFoundError(f"Erro ao criar agente: {e}")
 
-    async def _ensure_session_memory(self, session_id: str) -> dict[str, Any]:
-        """Retorna a memória existente ou cria uma nova sessão com paciente aleatório."""
+    async def _ensure_session_memory(self, session_id: str, user_login: Optional[str] = None) -> dict[str, Any]:
+        """Retorna a memória existente ou cria uma nova sessão com paciente e perfil aleatórios."""
         existing = await self.chat_memory_store.get_memory(session_id)
         if existing:
+            if user_login and not existing.get("user_login"):
+                existing["user_login"] = user_login
+                await self.chat_memory_store.save_memory(
+                    session_id=session_id,
+                    symptom_list=existing.get("symptom_list") or [],
+                    disease=existing.get("disease"),
+                    history=existing.get("history"),
+                    patient_profile=existing.get("patient_profile"),
+                    user_login=user_login,
+                )
             return existing
 
         symptom_entities, disease = self._get_random_patient_data()
         symptom_list = [s.symptom_name for s in symptom_entities]
 
+        # Gera perfil comportamental aleatório para esta sessão
+        from src.Domain.Entities.PatientProfile import PatientProfile
+        profile = PatientProfile.random()
+        self.logger.info(
+            f"🎭 Perfil comportamental sorteado: "
+            f"cooperação={profile.cooperation}, discurso={profile.discourse}, "
+            f"emocionalidade={profile.emotionality}, controle_info={profile.info_control}, "
+            f"atitude={profile.attitude}"
+        )
+
         return await self.chat_memory_store.save_memory(
             session_id=session_id,
             symptom_list=symptom_list,
             disease=disease,
+            patient_profile=profile.to_dict(),
+            user_login=user_login,
         )
+
+    def _add_tokens_to_student(self, login: str, count: int) -> None:
+        """Adiciona os tokens consumidos nesta interação diretamente ao saldo do aluno."""
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE students
+                        SET total_tokens = total_tokens + %s
+                        WHERE LOWER(login) = LOWER(%s)
+                        """,
+                        (count, login.strip()),
+                    )
+        except Exception as exc:
+            self.logger.error(f"Erro ao adicionar tokens ao aluno {login}: {exc}")
 
     def _get_random_patient_data(self) -> Tuple[List[Symptom], Optional[str]]:
         all_patients = self.patient_repository.list_all()
@@ -157,6 +208,19 @@ class ChatCommandHandler:
         symptoms = self.patient_symptom_repository.list_symptoms_for_patient(patient.patient_id)
         self.logger.info(f"Paciente sorteado: {patient.patient_id} | Doença: {patient.disease}")
         return symptoms, patient.disease
+
+    def _build_profile_block(self, patient_profile: Optional[dict]) -> str:
+        """Constrói o bloco de texto do perfil para injeção nos prompts dos agentes."""
+        if not patient_profile:
+            return ""
+        try:
+            from src.Domain.Entities.PatientProfile import PatientProfile
+            from src.Domain.Chatbot.ProfilePromptBuilder import build_profile_block
+            profile = PatientProfile.from_dict(patient_profile)
+            return build_profile_block(profile)
+        except Exception as exc:
+            self.logger.warning(f"Erro ao construir bloco de perfil: {exc}")
+            return ""
 
     def _format_history(self, history: list) -> str:
         """Formata as últimas N mensagens do histórico para injeção no prompt."""
@@ -176,8 +240,12 @@ class ChatCommandHandler:
         conversation_context: str,
         symptom_list: list,
         disease: Optional[str],
+        profile_block: str = "",
     ) -> dict[str, Any]:
-        data: dict[str, Any] = {"conversation_history": conversation_context}
+        data: dict[str, Any] = {
+            "conversation_history": conversation_context,
+            "patient_profile_block": profile_block,
+        }
         if agent_type == "sintomas":
             data["symptom_list"] = symptom_list
             data["disease"] = disease

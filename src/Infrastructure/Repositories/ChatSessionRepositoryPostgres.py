@@ -209,39 +209,6 @@ class ChatSessionRepositoryPostgres:
         self._ensure_table()
         with get_connection() as conn:
             with conn.cursor() as cur:
-                # 1) Busca o histórico e o login do dono antes de deletar
-                cur.execute(
-                    "SELECT history, user_login FROM chat_sessions WHERE id = %s",
-                    (chat_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    history_raw, user_login = row
-                    # Calcula tokens (contagem de palavras) do histórico desta sessão
-                    history = history_raw
-                    if isinstance(history, str):
-                        try:
-                            history = json.loads(history)
-                        except Exception:
-                            history = []
-                    token_count = 0
-                    if isinstance(history, list):
-                        for entry in history:
-                            msg = entry.get("message", "") if isinstance(entry, dict) else ""
-                            token_count += len(str(msg).split())
-
-                    # 2) Acumula tokens no registro do aluno (se houver login vinculado)
-                    if user_login and token_count > 0:
-                        cur.execute(
-                            """
-                            UPDATE students
-                            SET total_tokens = total_tokens + %s
-                            WHERE LOWER(login) = LOWER(%s)
-                            """,
-                            (token_count, user_login),
-                        )
-
-                # 3) Deleta a sessão
                 cur.execute(
                     "DELETE FROM chat_sessions WHERE id = %s RETURNING id",
                     (chat_id,),
