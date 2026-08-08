@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+export PYTHONPATH=/app:$PYTHONPATH
+
 # Gera o arquivo .env do backend automaticamente a partir do ambiente do container
 cat << ENVEOF > /app/.env
 DATABASE_URL=${DATABASE_URL}
@@ -13,7 +15,7 @@ echo "✅ Arquivo /app/.env gerado automaticamente no container do backend!"
 echo "⏳ Aguardando banco de dados PostgreSQL inicializar..."
 python -c "
 import time, os
-from Infrastructure.Database.Connection import get_connection
+from src.Infrastructure.Database.Connection import get_connection
 for i in range(30):
     try:
         with get_connection() as conn:
@@ -26,7 +28,7 @@ for i in range(30):
 
 # Verifica se o banco de dados já possui as tabelas inicializadas
 TABLE_EXISTS=$(python -c "
-from Infrastructure.Database.Connection import get_connection
+from src.Infrastructure.Database.Connection import get_connection
 try:
     with get_connection() as conn:
         with conn.cursor() as cur:
